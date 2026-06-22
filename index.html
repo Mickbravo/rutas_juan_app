@@ -1,0 +1,1309 @@
+<!DOCTYPE html>
+<html lang="es-CL">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>App de Rutas — Oficina + Chofer (maqueta)</title>
+
+  <!-- Leaflet: mapa gratis (OpenStreetMap). Necesita internet. -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Supabase: base de datos en la nube. Necesita internet. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <style>
+    :root {
+      --azul: #2c3e50;
+      --verde: #1a8c3a;
+      --naranjo: #e08a00;
+      --rojo: #c0392b;
+      --gris: #555;
+      --borde: #ddd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, "Segoe UI", Arial, sans-serif;
+      margin: 0; padding: 16px; color: #222; background: #f7f7f7;
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 4px; }
+    p.sub { margin: 0 0 14px; color: var(--gris); font-size: 0.9rem; }
+
+    /* Selector de rol */
+    .roles { display: flex; gap: 8px; margin-bottom: 16px; }
+    .roles button {
+      flex: 1; max-width: 220px; padding: 10px; font-size: 0.95rem;
+      border: 1px solid var(--azul); border-radius: 8px;
+      background: #fff; color: var(--azul); cursor: pointer;
+    }
+    .roles button.activo { background: var(--azul); color: #fff; }
+
+    .barra { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+    button.accion {
+      font-size: 0.95rem; padding: 8px 14px; border: none; border-radius: 6px;
+      background: var(--azul); color: #fff; cursor: pointer;
+    }
+    button.accion:disabled { opacity: 0.45; cursor: default; }
+    button.sec { background: #fff; color: var(--azul); border: 1px solid var(--azul); }
+
+    #estado { font-size: 0.9rem; color: var(--gris); }
+    #mapa { height: 340px; border: 1px solid var(--borde); border-radius: 8px; margin-bottom: 14px; }
+
+    .resumen { display: flex; gap: 14px; margin-bottom: 10px; font-size: 0.9rem; flex-wrap: wrap; }
+    .resumen b { font-weight: 700; }
+
+    table { width: 100%; border-collapse: collapse; background: #fff; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--borde); vertical-align: top; }
+    th { background: #f0f0f0; }
+
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; color: #fff; font-size: 0.74rem; white-space: nowrap; }
+    .b-ok { background: var(--verde); }
+    .b-revisar { background: var(--naranjo); }
+    .b-pendiente { background: var(--rojo); }
+    /* PASO extra (v6.1): "ENTREGADO" amarillo fuerte para la vista de la oficina */
+    .b-entregado { background: #ffd400; color: #5a4500; font-weight: 800; letter-spacing: .3px; box-shadow: 0 0 0 2px rgba(255,212,0,.4); }
+    tr.fila-entregada { background: #fffbea; }
+    @keyframes destelloEntrega { from { background: #ffe98a; } to { background: #fffbea; } }
+    tr.fila-entregada.recien { animation: destelloEntrega 1.3s ease-out; }
+
+    .coord { font-family: monospace; font-size: 0.8rem; color: var(--gris); }
+
+    /* Mini-formulario para resolver pendientes */
+    .resolver { display: flex; flex-direction: column; gap: 5px; }
+    .resolver input { padding: 4px 6px; border: 1px solid var(--borde); border-radius: 4px; font-size: 0.8rem; width: 160px; }
+    .resolver .mini { padding: 4px 8px; font-size: 0.78rem; }
+    .resolver .fila2 { display: flex; gap: 4px; }
+
+    /* Vista chofer */
+    .parada { background: #fff; border: 1px solid var(--borde); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+    .parada.entregada { opacity: 0.5; }
+    .parada .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .parada .dir { color: var(--gris); font-size: 0.85rem; margin-top: 2px; }
+    .parada .botones { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+    .parada a.waze { background: #33ccff; color: #003; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; }
+    .parada a.maps { background: #eee; color: #333; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; }
+    .parada button.entregar { padding: 6px 12px; border: none; border-radius: 6px; background: var(--verde); color: #fff; cursor: pointer; font-size: 0.85rem; }
+    .parada button.entregar.deshacer { background: #999; }
+
+    .progreso-caja { background: #e6e6e6; border-radius: 10px; height: 14px; overflow: hidden; margin: 8px 0 14px; }
+    .progreso-barra { background: var(--verde); height: 100%; width: 0%; transition: width 0.3s; }
+
+    .aviso { padding: 24px; text-align: center; color: var(--gris); }
+
+    /* Bodega y optimización */
+    .accion.mini { padding: 4px 10px; font-size: 0.8rem; }
+    .bodega-caja {
+      background: #fff; border: 1px solid var(--borde); border-radius: 8px;
+      padding: 8px 10px; margin-bottom: 10px; font-size: 0.85rem;
+      display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+    }
+    .bodega-caja input {
+      width: 95px; padding: 4px 6px; border: 1px solid var(--borde);
+      border-radius: 4px; font-family: monospace; font-size: 0.8rem;
+    }
+    .panel-opt {
+      background: #eef7ee; border: 1px solid var(--verde); border-radius: 8px;
+      padding: 12px 14px; margin-bottom: 12px; font-size: 0.95rem; line-height: 1.5;
+    }
+    .panel-opt .ahorro { font-size: 1.3rem; font-weight: 700; color: var(--verde); margin-top: 4px; }
+
+    /* Cargar lista del día */
+    .cargar-caja {
+      background: #fff; border: 1px solid var(--borde); border-radius: 8px;
+      padding: 12px 14px; margin-bottom: 14px;
+    }
+    .cargar-caja textarea {
+      width: 100%; min-height: 90px; padding: 8px; border: 1px solid var(--borde);
+      border-radius: 6px; font-family: monospace; font-size: 0.82rem; resize: vertical;
+    }
+    .cargar-botones { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+
+    /* Modo guiado del chofer */
+    .chofer-cabecera { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .tarjeta-guia {
+      background: #fff; border: 2px solid var(--azul); border-radius: 12px;
+      padding: 18px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    }
+    .tarjeta-guia .etiqueta { color: var(--azul); font-weight: 700; font-size: 0.8rem; letter-spacing: 1px; }
+    .tarjeta-guia .num { font-size: 2.4rem; font-weight: 800; color: var(--azul); line-height: 1; margin: 4px 0; }
+    .tarjeta-guia .cliente { font-size: 1.3rem; font-weight: 700; margin-top: 4px; }
+    .tarjeta-guia .direccion { color: var(--gris); font-size: 1rem; margin: 6px 0 16px; }
+    .tarjeta-guia .acciones { display: flex; flex-direction: column; gap: 8px; max-width: 320px; margin: 0 auto; }
+    .tarjeta-guia a.waze-big {
+      background: #33ccff; color: #003; text-decoration: none; padding: 14px;
+      border-radius: 10px; font-size: 1.15rem; font-weight: 700;
+    }
+    .tarjeta-guia button.entregar-big {
+      background: var(--verde); color: #fff; border: none; padding: 14px;
+      border-radius: 10px; font-size: 1.15rem; font-weight: 700; cursor: pointer;
+    }
+    .tarjeta-guia .fila-sec { display: flex; gap: 8px; justify-content: center; }
+    .tarjeta-guia .fila-sec a, .tarjeta-guia .fila-sec button {
+      background: #eee; color: #333; text-decoration: none; border: none;
+      padding: 8px 14px; border-radius: 8px; font-size: 0.9rem; cursor: pointer;
+    }
+    .siguiente-peek { text-align: center; color: var(--gris); font-size: 0.9rem; margin-top: 12px; }
+    .completado { text-align: center; padding: 30px; }
+    .completado .check { font-size: 3rem; }
+    .completado .txt { font-size: 1.4rem; font-weight: 700; color: var(--verde); margin-top: 8px; }
+
+    .leyenda-mapa { display: flex; gap: 14px; font-size: 0.8rem; color: var(--gris); margin: -6px 0 12px; }
+    .leyenda-mapa .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-right: 3px; }
+  </style>
+</head>
+<body>
+
+  <h1>App de Rutas — Hoja de Viaje 46348</h1>
+  <p class="sub">Maqueta de dos roles · 26 entregas · comuna Las Condes · <b style="color:var(--verde)">versión 6.1</b></p>
+
+  <!-- Cartel de estado de la conexión a Supabase (prueba del paso 2). -->
+  <div id="estadoSupabase" style="padding:8px 12px; border-radius:6px; margin-bottom:14px;
+       font-size:0.85rem; background:#fff3cd; border:1px solid #e0c000; color:#665500">
+    ⏳ Probando conexión con Supabase…
+  </div>
+
+  <!-- ============ SELECTOR DE ROL ============ -->
+  <div class="roles">
+    <button id="rolOficina" class="activo" onclick="cambiarRol('oficina')">🗂️ Oficina (dueño)</button>
+    <button id="rolChofer" onclick="cambiarRol('chofer')">🚚 Chofer</button>
+  </div>
+
+  <!-- ============ VISTA OFICINA ============ -->
+  <div id="vistaOficina">
+
+    <!-- Puerta de entrada: Juan pega o sube la lista del día. -->
+    <div class="cargar-caja">
+      <b>📋 Cargar lista del día</b>
+      <p style="margin:6px 0; font-size:0.82rem; color:#555">
+        Pega desde Excel (Nombre · Dirección · Comuna), una entrega por línea.
+        Si no pones comuna, asumimos Las Condes.
+      </p>
+      <textarea id="textoLista" placeholder="Leopoldo Díaz&#9;Valenzuela Puelma 10167&#9;Las Condes
+Tamara Toloza&#9;Rubens 1893&#9;Las Condes
+Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
+      <div class="cargar-botones">
+        <button class="accion" onclick="cargarLista()">Cargar lista pegada</button>
+        <label class="accion sec" style="cursor:pointer">
+          o sube un archivo (.csv / .txt)
+          <input type="file" id="archivoLista" accept=".csv,.txt" style="display:none" onchange="cargarArchivo(event)" />
+        </label>
+        <button class="accion sec" onclick="restaurarEjemplo()">Usar lista de ejemplo (26)</button>
+      </div>
+    </div>
+
+    <div class="barra">
+      <button id="btnGeo" class="accion" onclick="geocodificarTodas()">Geocodificar</button>
+      <button id="btnCopiar" class="accion sec" onclick="copiarJSON()" disabled>Copiar coordenadas (JSON)</button>
+      <span id="estado">Listo. Aprieta "Geocodificar" para empezar.</span>
+    </div>
+
+    <div id="mapa"></div>
+    <div class="leyenda-mapa">
+      <span><span class="dot" style="background:#2c6fb5"></span> por entregar</span>
+      <span><span class="dot" style="background:#1a8c3a"></span> entregada</span>
+      <span><span class="dot" style="background:#e08a00"></span> revisar</span>
+    </div>
+
+    <!-- PASO 5B: seguimiento en vivo. Aparece cuando hay una ruta enviada y
+         se va llenando solo a medida que el chofer marca entregas. -->
+    <div id="panelVivo" style="display:none; background:#eef7ee; border:1px solid var(--verde);
+         border-radius:8px; padding:10px 14px; margin-bottom:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+        <b style="color:var(--verde)">🛰️ Seguimiento en vivo</b>
+        <span style="font-size:0.85rem; color:var(--gris)" id="vivoConteo">0 / 0 entregadas</span>
+      </div>
+      <div class="progreso-caja" style="margin:8px 0 6px;"><div id="vivoBarra" class="progreso-barra"></div></div>
+      <div id="vivoUltima" style="font-size:0.82rem; color:var(--gris)">Esperando que el chofer entregue…</div>
+    </div>
+
+    <div class="resumen">
+      <span style="color:var(--verde)">● Ubicadas: <b id="cOk">0</b></span>
+      <span style="color:var(--rojo)">● Pendientes: <b id="cPend">0</b></span>
+      <span style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap">
+        <button id="btnOptimizar" class="accion sec" onclick="optimizar()" disabled>📐 Optimizar ruta</button>
+        <button id="btnEnviar" class="accion" onclick="enviarRuta()" disabled>Enviar ruta al chofer →</button>
+      </span>
+    </div>
+
+    <!-- Bodega: punto de partida de la ruta. Se configura una sola vez.
+         Ahora se ESCRIBE LA DIRECCIÓN en palabras y la app la geocodifica
+         (mismo patrón que las entregas). Las coordenadas quedan como plan B. -->
+    <div class="bodega-caja">
+      <b>🏭 Bodega (partida):</b>
+      <input id="bodegaDir" placeholder="Escribe la dirección, ej: Av. Las Condes 11000, Las Condes"
+             style="width:300px; font-family:inherit;"
+             onkeydown="if(event.key==='Enter') buscarBodega()" />
+      <button class="accion sec mini" onclick="buscarBodega()">Buscar y guardar</button>
+      <a href="#" onclick="mostrarCoordsBodega(); return false;"
+         style="font-size:0.78rem; color:var(--gris);">pegar coordenadas</a>
+      <span id="bodegaCoordsBox" style="display:none;">
+        lat <input id="bodegaLat" value="-33.4500" />
+        lng <input id="bodegaLng" value="-70.6600" />
+        <button class="accion sec mini" onclick="guardarBodega()">Guardar coords</button>
+      </span>
+      <span id="bodegaMsg" style="font-size:0.8rem; color:var(--naranjo); flex-basis:100%;">⚠ es una bodega de ejemplo, escribe la dirección real arriba</span>
+    </div>
+
+    <!-- Resultado de la optimización (aparece al apretar "Optimizar"). -->
+    <div id="panelOpt" class="panel-opt" style="display:none"></div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Cliente</th><th>Dirección</th>
+          <th>Estado</th><th>Coordenadas</th><th>Resolver</th>
+        </tr>
+      </thead>
+      <tbody id="tabla"></tbody>
+    </table>
+  </div>
+
+  <!-- ============ VISTA CHOFER ============ -->
+  <div id="vistaChofer" style="display:none">
+    <div id="choferEspera" class="aviso"></div>
+    <div id="choferRuta" style="display:none">
+      <div class="chofer-cabecera">
+        <b>Entregadas: <span id="progTexto">0 / 0</span></b>
+        <button id="btnModo" class="accion sec mini" onclick="alternarModo()">Ver lista completa</button>
+      </div>
+      <div class="progreso-caja"><div id="progBarra" class="progreso-barra"></div></div>
+      <div id="listaParadas"></div>
+    </div>
+  </div>
+
+  <script>
+    // ================================================================
+    // 0) CONEXIÓN A SUPABASE (paso 2)
+    //    Estas dos líneas son las llaves de tu proyecto "RutasJuan".
+    //    La publishable key es pública y segura de tener acá, porque el
+    //    RLS de las tablas controla qué se puede hacer con ella.
+    // ================================================================
+    const SUPABASE_URL = "https://nlokvinfcydhllkcpobe.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_UGcwKQrhz5ERI65LnZbfFQ_ql6WFCkm";
+
+    // Creamos el cliente "db": es nuestra puerta para hablar con la base.
+    const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // Prueba de conexión: apenas carga la página, leemos la tabla "rutas".
+    // No nos importan los datos (está vacía); solo confirmar que conecta.
+    async function probarConexion() {
+      const caja = document.getElementById("estadoSupabase");
+      try {
+        const { error } = await db.from("rutas").select("id").limit(1);
+        if (error) throw error;
+        caja.style.background = "#eef7ee";
+        caja.style.borderColor = "#1a8c3a";
+        caja.style.color = "#1a6b2e";
+        caja.textContent = "✓ Conectado a Supabase (proyecto RutasJuan)";
+      } catch (e) {
+        caja.style.background = "#fdecea";
+        caja.style.borderColor = "#c0392b";
+        caja.style.color = "#922";
+        caja.textContent = "✗ No se pudo conectar a Supabase: " + (e.message || e);
+      }
+    }
+    window.addEventListener("load", probarConexion);
+
+    // ================================================================
+    // 1) LOS DATOS (las 26 entregas validadas)
+    //    "query" = calle + número + comuna, lo que entiende el mapa.
+    //    El depto/oficina NO va acá (al mapa le estorba); es dato del chofer.
+    // ================================================================
+    const ENTREGAS = [
+      { seq: 1,  nombre: "Leopoldo Díaz",       query: "Valenzuela Puelma 10167, Las Condes, Santiago, Chile" },
+      { seq: 2,  nombre: "Tamara Toloza",       query: "Rubens 1893, Las Condes, Santiago, Chile" },
+      { seq: 3,  nombre: "Alexis Silva",        query: "Luis Thayer Ojeda 1230, Las Condes, Santiago, Chile" },
+      { seq: 4,  nombre: "Jimmy Gutiérrez",     query: "Padre Le Paige 1648, Las Condes, Santiago, Chile" },
+      { seq: 5,  nombre: "Jaime Berríos",       query: "Vasco de Gama 4610, Las Condes, Santiago, Chile" },
+      { seq: 6,  nombre: "Rishi Adnani",        query: "Soria 889, Las Condes, Santiago, Chile" },
+      { seq: 7,  nombre: "Nancy Calderón",      query: "Gredos 7700, Las Condes, Santiago, Chile" },
+      { seq: 8,  nombre: "Natalia Mesías",      query: "Pichidangui 1236, Las Condes, Santiago, Chile" },
+      { seq: 9,  nombre: "Constanza San Martín",query: "Asturias 77, Las Condes, Santiago, Chile" },
+      { seq: 10, nombre: "Catalina Flores",     query: "Las Malvas 788, Las Condes, Santiago, Chile" },
+      { seq: 11, nombre: "Alicia Hamilton",     query: "Nevería 5394, Las Condes, Santiago, Chile" },
+      { seq: 12, nombre: "Agustina Hoces",      query: "Warren Smith 67, Las Condes, Santiago, Chile" },
+      { seq: 13, nombre: "M. Pilar González",   query: "Noruega 6427, Las Condes, Santiago, Chile" },
+      { seq: 14, nombre: "Jessica Moya",        query: "Laredo 8405, Las Condes, Santiago, Chile" },
+      { seq: 15, nombre: "Paloma Freig",        query: "Gustavo V 160, Las Condes, Santiago, Chile" },
+      { seq: 16, nombre: "Florencia Ortiz",     query: "Avenida Américo Vespucio Norte 958, Las Condes, Santiago, Chile" },
+      { seq: 17, nombre: "Loreto Bravo",        query: "Alonso de Córdova 6152, Las Condes, Santiago, Chile" },
+      { seq: 18, nombre: "Bárbara Soto",        query: "Las Verbenas 8318, Las Condes, Santiago, Chile" },
+      { seq: 19, nombre: "Dominique Berríos",   query: "Gerónimo de Alderete 885, Las Condes, Santiago, Chile" },
+      { seq: 20, nombre: "Viviana Pérez",       query: "Hermanos Cabot 7393, Las Condes, Santiago, Chile" },
+      { seq: 21, nombre: "Valeria Iturriaga",   query: "Anillo La Cumbre 1259, Las Condes, Santiago, Chile" },
+      { seq: 22, nombre: "Juan J. Palavicino",  query: "Avenida Las Condes 8845, Las Condes, Santiago, Chile" },
+      { seq: 23, nombre: "Carolina Bernstein",  query: "Avenida Presidente Kennedy 7301, Las Condes, Santiago, Chile" },
+      { seq: 24, nombre: "Lastenia Vega",       query: "Las Verbenas 8925, Las Condes, Santiago, Chile" },
+      { seq: 25, nombre: "M. José Canales",     query: "La Portería 11859, Las Condes, Santiago, Chile" },
+      { seq: 26, nombre: "Camila Ríos",         query: "San José de la Sierra 1250, Las Condes, Santiago, Chile" },
+    ];
+
+    // Estado de trabajo: enriquecemos cada entrega con lo geocodificado.
+    // estado: "sin" | "ok" | "revisar" | "pendiente"
+    let datos = ENTREGAS.map(e => ({ ...e, estado: "sin", lat: null, lng: null, comuna: "—" }));
+    let rutaEnviada = false;
+    let rutaIdActual = null;      // id de la ruta guardada en Supabase (pasos 4 y 5)
+    let geocodificando = false;   // ¿se está geocodificando ahora mismo?
+    const entregadas = new Set(); // seq de las paradas ya entregadas (mapa de oficina)
+
+    // PASO 4: la ruta que ve el chofer ahora viene LEÍDA de Supabase, no de
+    // memoria. Cada parada trae su "id" (uuid) real de la tabla "entregas".
+    let paradasChofer = [];       // filas de "entregas" leídas de la base
+    let cargandoChofer = false;   // ¿se está leyendo la ruta del chofer ahora?
+
+    // PASO 5B: la oficina "escucha" la tabla "entregas" en tiempo real.
+    let canalEntregas = null;     // canal Realtime suscrito (o null si no hay)
+    let totalEntregasRuta = 0;    // cuántas paradas tiene la ruta en curso
+
+    const CENTRO_LASCONDES = { lat: -33.408, lng: -70.560 };
+
+    // Bodega = punto de partida de la ruta. Es un EJEMPLO; hay que poner la
+    // coordenada real de la bodega de Paris. En la app real se configura una vez.
+    let BODEGA = { lat: -33.4500, lng: -70.6600 };
+
+    // Resultado de la optimización:
+    let ordenOptimo = null;          // paradas en el orden más corto (null = sin optimizar)
+    let kmHoja = 0, kmOptimo = 0;    // distancias para comparar
+    let lineaRuta = null, marcadorBodega = null; // dibujos en el mapa
+
+    // ================================================================
+    // 2) EL MAPA (se crea al cargar; avisa si no hay internet)
+    // ================================================================
+    let mapa = null;
+    const marcadores = {}; // seq -> marcador, para poder actualizarlo
+
+    window.addEventListener("load", function () {
+      if (typeof L === "undefined") { avisarSinInternet(); return; }
+      mapa = L.map("mapa").setView([CENTRO_LASCONDES.lat, CENTRO_LASCONDES.lng], 13);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap", maxZoom: 19
+      }).addTo(mapa);
+      pintarTabla();
+    });
+
+    function avisarSinInternet() {
+      document.getElementById("mapa").innerHTML =
+        '<div class="aviso" style="color:var(--rojo);font-weight:600">' +
+        '⚠ No se pudo cargar el mapa.<br><br>' +
+        '<span style="font-weight:400">Descarga este archivo y ábrelo con doble clic en tu ' +
+        'navegador (Chrome o Edge), con internet. No funciona dentro de la vista previa del chat.</span></div>';
+      document.getElementById("btnGeo").disabled = true;
+    }
+
+    // ================================================================
+    // 3) AUXILIARES
+    // ================================================================
+    function esperar(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    function distanciaKm(a, b) {
+      const R = 6371, rad = Math.PI / 180;
+      const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+      const x = Math.sin(dLat/2)**2 + Math.cos(a.lat*rad)*Math.cos(b.lat*rad)*Math.sin(dLng/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+    }
+
+    async function geocodificar(query) {
+      const url = "https://nominatim.openstreetmap.org/search"
+        + "?format=jsonv2&limit=1&addressdetails=1&countrycodes=cl"
+        + "&q=" + encodeURIComponent(query);
+      const resp = await fetch(url, { headers: { "Accept-Language": "es" } });
+      const data = await resp.json();
+      return data.length ? data[0] : null;
+    }
+
+    // Color del punto: entregada = verde, por entregar = azul, a revisar = naranjo.
+    function colorMarcador(d) {
+      if (entregadas.has(d.seq)) return "#1a8c3a"; // entregada → verde
+      if (d.estado === "revisar") return "#e08a00"; // a revisar → naranjo
+      return "#2c6fb5";                              // ubicada, sin entregar → azul
+    }
+
+    // Coloca/actualiza un marcador en el mapa según su estado.
+    function ponerMarcador(d) {
+      if (!mapa || d.lat == null) return;
+      if (marcadores[d.seq]) mapa.removeLayer(marcadores[d.seq]);
+      const entregada = entregadas.has(d.seq);
+      marcadores[d.seq] = L.circleMarker([d.lat, d.lng], {
+        radius: entregada ? 9 : 7, color: "#fff", weight: 2,
+        fillColor: colorMarcador(d), fillOpacity: 1
+      }).addTo(mapa).bindPopup(
+        `<b>${d.seq}. ${d.nombre}</b><br>${d.query}` +
+        (entregada ? "<br><b style='color:#1a8c3a'>Entregada ✓</b>" : "")
+      );
+    }
+
+    // Re-pinta los colores de TODOS los puntos (para reflejar entregas en vivo).
+    function refrescarMapa() {
+      if (!mapa) return;
+      datos.forEach(d => { if (d.lat != null) ponerMarcador(d); });
+    }
+
+    // ================================================================
+    // 3.4) SEGUIMIENTO EN VIVO (PASO 5B)
+    //   La oficina se suscribe a los cambios de "entregas" de esta ruta.
+    //   Cuando el chofer marca una entrega DESDE OTRO APARATO, la base
+    //   avisa por Realtime y acá pintamos el punto verde solo, sin recargar.
+    //
+    //   Detalle clave: la fila de "entregas" no tiene el "seq" de la oficina,
+    //   así que la amarramos a su punto del mapa por el NOMBRE (son únicos en
+    //   la hoja) y, si falla, por la coordenada más cercana.
+    // ================================================================
+    function buscarEnDatos(row) {
+      let d = datos.find(x => x.nombre === row.nombre);
+      if (!d && row.lat != null) {
+        let mejor = null, mejorD = Infinity;
+        for (const x of datos) {
+          if (x.lat == null) continue;
+          const dist = distanciaKm({ lat: x.lat, lng: x.lng }, { lat: row.lat, lng: row.lng });
+          if (dist < mejorD) { mejorD = dist; mejor = x; }
+        }
+        if (mejor && mejorD < 0.05) d = mejor; // a menos de ~50 m: es el mismo
+      }
+      return d;
+    }
+
+    // Un cambio llegó (por Realtime o por la sincronización inicial).
+    function manejarCambioEntrega(row, conPulso = true) {
+      const d = buscarEnDatos(row);
+      if (!d) return;
+      if (row.estado === "entregada") entregadas.add(d.seq);
+      else entregadas.delete(d.seq);   // por si el chofer "deshace"
+      ponerMarcador(d);                // lo re-pinta con su nuevo color
+      if (conPulso) pulsarMarcador(d.seq);
+      actualizarPanelVivo(row);
+      refrescarFilaEntrega(d, conPulso); // v6.1: enciende el "ENTREGADO" en la tabla
+    }
+
+    // v6.1: actualiza UNA fila de la tabla cuando cambia su entrega (en vivo).
+    function refrescarFilaEntrega(d, recien) {
+      const td = document.getElementById("estado-" + d.seq);
+      const tr = document.getElementById("fila-" + d.seq);
+      if (!td || !tr) return;
+      if (entregadas.has(d.seq)) {
+        td.innerHTML = '<span class="badge b-entregado">ENTREGADO ✓</span>';
+        tr.classList.add("fila-entregada");
+        if (recien) {                  // breve destello para que el ojo lo pille
+          tr.classList.remove("recien");
+          void tr.offsetWidth;         // reinicia la animación
+          tr.classList.add("recien");
+        }
+      } else {                         // el chofer deshizo: volvemos al estado normal
+        td.innerHTML = badgeGeocode(d.estado);
+        tr.classList.remove("fila-entregada", "recien");
+      }
+    }
+
+    // Pequeño "latido" del punto recién entregado, para que se note el cambio.
+    function pulsarMarcador(seq) {
+      const m = marcadores[seq];
+      if (!m) return;
+      const r0 = m.options.radius || 9;
+      m.setRadius(r0 + 8);
+      setTimeout(() => { if (marcadores[seq] === m) m.setRadius(r0); }, 650);
+    }
+
+    // Actualiza el panel verde de "Seguimiento en vivo".
+    function actualizarPanelVivo(rowReciente) {
+      const panel = document.getElementById("panelVivo");
+      panel.style.display = "block";
+      const hechas = entregadas.size;
+      const total = totalEntregasRuta || datos.filter(d => d.lat != null).length;
+      document.getElementById("vivoConteo").textContent = `${hechas} / ${total} entregadas`;
+      document.getElementById("vivoBarra").style.width = total ? (hechas / total * 100) + "%" : "0%";
+      if (rowReciente) {
+        // entregada_at viene en UTC; toLocaleTimeString lo muestra en hora chilena.
+        const hora = rowReciente.entregada_at
+          ? new Date(rowReciente.entregada_at).toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })
+          : "";
+        const verbo = rowReciente.estado === "entregada" ? "entregó" : "volvió a dejar pendiente";
+        document.getElementById("vivoUltima").innerHTML =
+          `Último: <b>${rowReciente.nombre}</b> — se ${verbo}${hora ? " a las " + hora : ""} ✓`;
+      }
+    }
+
+    // Abre el canal Realtime para la ruta indicada (cierra el anterior si había).
+    function suscribirEntregasOficina(rutaId) {
+      if (!rutaId) return;
+      if (canalEntregas) { db.removeChannel(canalEntregas); canalEntregas = null; }
+      canalEntregas = db
+        .channel("entregas-oficina-" + rutaId)
+        .on("postgres_changes",
+          { event: "UPDATE", schema: "public", table: "entregas", filter: `ruta_id=eq.${rutaId}` },
+          (payload) => manejarCambioEntrega(payload.new))
+        .subscribe();
+    }
+
+    // Sincroniza el estado ACTUAL al empezar a escuchar (por si ya había
+    // entregas marcadas antes de suscribirnos, ej: la oficina reabre la vista).
+    async function sincronizarEntregadas(rutaId) {
+      try {
+        const { data, error } = await db.from("entregas").select("*").eq("ruta_id", rutaId);
+        if (error) throw error;
+        totalEntregasRuta = (data || []).length;
+        (data || []).forEach(row => {
+          if (row.estado === "entregada") manejarCambioEntrega(row, false); // sin pulso al cargar
+        });
+        actualizarPanelVivo(null);
+      } catch (e) {
+        // Silencioso: aunque falle la sincronización, el canal igual queda escuchando.
+      }
+    }
+
+    // ================================================================
+    // 3.5) CARGAR LA LISTA DEL DÍA
+    //   Convierte el texto pegado (o un archivo) en las paradas "datos".
+    //   Corta por TAB (pegado de Excel) o por punto y coma. NUNCA por coma,
+    //   porque las direcciones tienen comas y se rompería todo.
+    // ================================================================
+    function parsearLista(texto) {
+      const lineas = texto.trim().split(/\r?\n/).filter(l => l.trim());
+      const filas = [];
+      for (const linea of lineas) {
+        const cols = linea.split(/\t|;/).map(c => c.trim()).filter(c => c !== "");
+        if (cols.length < 2) continue; // necesita al menos Nombre y Dirección
+        const nombre = cols[0];
+        const direccion = cols[1];
+        const comuna = cols[2] || "Las Condes"; // si no viene, asumimos Las Condes
+        filas.push({
+          seq: filas.length + 1,
+          nombre,
+          query: `${direccion}, ${comuna}, Santiago, Chile`,
+          estado: "sin", lat: null, lng: null, comuna: "—"
+        });
+      }
+      return filas;
+    }
+
+    function aplicarLista(filas, origen) {
+      if (!filas.length) {
+        document.getElementById("estado").textContent =
+          "No se entendió ninguna entrega. Revisa el formato: Nombre, Dirección (y comuna opcional) por línea.";
+        return;
+      }
+      datos = filas;
+      reiniciarTodo();
+      pintarTabla();
+      document.getElementById("estado").textContent =
+        `${filas.length} entregas cargadas ${origen}. Ahora aprieta "Geocodificar".`;
+    }
+
+    // Si estamos geocodificando, no dejamos cargar otra lista (se pisarían).
+    function ocupadoGeocodificando() {
+      if (geocodificando) {
+        document.getElementById("estado").textContent =
+          "Espera a que termine la geocodificación antes de cargar otra lista.";
+        return true;
+      }
+      return false;
+    }
+
+    function cargarLista() {
+      if (ocupadoGeocodificando()) return;
+      const texto = document.getElementById("textoLista").value;
+      aplicarLista(parsearLista(texto), "(pegadas)");
+    }
+
+    function cargarArchivo(evento) {
+      if (ocupadoGeocodificando()) return;
+      const archivo = evento.target.files[0];
+      if (!archivo) return;
+      const lector = new FileReader();
+      lector.onload = e => aplicarLista(parsearLista(e.target.result), `(de ${archivo.name})`);
+      lector.readAsText(archivo);
+    }
+
+    function restaurarEjemplo() {
+      if (ocupadoGeocodificando()) return;
+      datos = ENTREGAS.map(e => ({ ...e, estado: "sin", lat: null, lng: null, comuna: "—" }));
+      reiniciarTodo();
+      pintarTabla();
+      document.getElementById("estado").textContent = "Lista de ejemplo (26) restaurada.";
+    }
+
+    // Borra todo lo calculado/dibujado para empezar limpio con una lista nueva.
+    function reiniciarTodo() {
+      ordenOptimo = null;
+      kmHoja = 0; kmOptimo = 0;
+      rutaEnviada = false;
+      entregadas.clear();
+      document.getElementById("panelOpt").style.display = "none";
+      document.getElementById("btnCopiar").disabled = true;
+      limpiarMapa();
+
+      // PASO 5B: una lista nueva = ruta distinta. Cerramos el seguimiento viejo.
+      rutaIdActual = null;
+      totalEntregasRuta = 0;
+      if (canalEntregas) { db.removeChannel(canalEntregas); canalEntregas = null; }
+      document.getElementById("panelVivo").style.display = "none";
+    }
+
+    function limpiarMapa() {
+      if (!mapa) return;
+      Object.values(marcadores).forEach(m => mapa.removeLayer(m));
+      for (const k in marcadores) delete marcadores[k];
+      if (lineaRuta) { mapa.removeLayer(lineaRuta); lineaRuta = null; }
+      if (marcadorBodega) { mapa.removeLayer(marcadorBodega); marcadorBodega = null; }
+    }
+
+    // ================================================================
+    // 4) GEOCODIFICAR LAS 26 (de a una, respetando 1 por segundo)
+    // ================================================================
+    async function geocodificarTodas() {
+      if (geocodificando) return;            // ya está corriendo: no la dupliques
+      geocodificando = true;
+      document.getElementById("btnGeo").disabled = true;
+      // Si re-geocodificamos, borramos cualquier optimización anterior.
+      ordenOptimo = null;
+      document.getElementById("panelOpt").style.display = "none";
+      pintarTabla();  // bloquea Enviar/Optimizar mientras dura el proceso
+
+      try {
+        for (let i = 0; i < datos.length; i++) {
+          const d = datos[i];
+          document.getElementById("estado").textContent = `Geocodificando ${i+1} de ${datos.length}…`;
+          try {
+            const r = await geocodificar(d.query);
+            if (!r) {
+              d.estado = "pendiente"; d.lat = null; d.lng = null; d.comuna = "—";
+            } else {
+              d.lat = parseFloat(r.lat); d.lng = parseFloat(r.lon);
+              d.comuna = (r.display_name || "").split(",").slice(0,2).join(",");
+              const enLasCondes = /Las Condes/i.test(r.display_name);
+              const lejos = distanciaKm(CENTRO_LASCONDES, { lat: d.lat, lng: d.lng }) > 8;
+              d.estado = (enLasCondes && !lejos) ? "ok" : "revisar";
+              ponerMarcador(d);
+            }
+          } catch (err) {
+            d.estado = "pendiente";
+          }
+          pintarTabla();
+          await esperar(1100);
+        }
+        document.getElementById("estado").textContent = "Geocodificación lista. Resuelve los pendientes (rojos).";
+        document.getElementById("btnCopiar").disabled = false;
+      } finally {
+        // Pase lo que pase, soltamos el botón y recalculamos el estado de los demás.
+        geocodificando = false;
+        document.getElementById("btnGeo").disabled = false;
+        pintarTabla();
+      }
+    }
+
+    // ================================================================
+    // 5) RESOLVER PENDIENTES
+    //    Opción A: reintentar con SOLO la calle (sin el número).
+    //    Opción B: pegar coordenadas sacadas de Google Maps.
+    // ================================================================
+
+    // A) Reintenta quitando el número de la casa. Muchas veces el mapa gratis
+    //    no tiene el número exacto, pero sí la calle. Queda parado en la cuadra.
+    async function reintentarPorCalle(seq) {
+      const d = datos.find(x => x.seq === seq);
+      const calleSinNumero = d.query
+        .split(",")[0].replace(/\s+\d+\s*$/, "").trim(); // saca el número final
+      const nuevoQuery = `${calleSinNumero}, Las Condes, Santiago, Chile`;
+      document.getElementById("estado").textContent = `Reintentando "${calleSinNumero}"…`;
+      try {
+        const r = await geocodificar(nuevoQuery);
+        if (r) {
+          d.lat = parseFloat(r.lat); d.lng = parseFloat(r.lon);
+          d.comuna = (r.display_name || "").split(",").slice(0,2).join(",");
+          d.estado = "revisar"; // la encontró, pero solo a nivel de calle: revisar
+          ponerMarcador(d);
+          document.getElementById("estado").textContent = `"${calleSinNumero}" ubicada a nivel de calle.`;
+        } else {
+          document.getElementById("estado").textContent = `Tampoco se encontró la calle. Usa coordenadas de Google Maps.`;
+        }
+      } catch (err) {
+        document.getElementById("estado").textContent = `Error de conexión al reintentar.`;
+      }
+      pintarTabla();
+    }
+
+    // B) Guarda coordenadas pegadas a mano (formato "-33.41, -70.58").
+    function guardarCoords(seq) {
+      const d = datos.find(x => x.seq === seq);
+      const texto = document.getElementById(`coord-${seq}`).value.trim();
+      const partes = texto.split(",").map(s => parseFloat(s.trim()));
+      if (partes.length !== 2 || isNaN(partes[0]) || isNaN(partes[1])) {
+        document.getElementById("estado").textContent = "Formato inválido. Debe ser: -33.41, -70.58";
+        return;
+      }
+      d.lat = partes[0]; d.lng = partes[1];
+      d.comuna = "puesto a mano (Google Maps)";
+      d.estado = "ok"; // resuelto manualmente: lo damos por bueno
+      ponerMarcador(d);
+      document.getElementById("estado").textContent = `Parada ${seq} resuelta a mano ✓`;
+      pintarTabla();
+    }
+
+    // ================================================================
+    // 6) PINTAR LA TABLA DE OFICINA
+    // ================================================================
+    // Badge de la columna "Estado" según el estado de GEOCODIFICACIÓN.
+    function badgeGeocode(estado) {
+      return {
+        sin:       '<span class="badge b-pendiente" style="background:#aaa">—</span>',
+        ok:        '<span class="badge b-ok">OK ✓</span>',
+        revisar:   '<span class="badge b-revisar">Revisar</span>',
+        pendiente: '<span class="badge b-pendiente">No ubicada</span>',
+      }[estado];
+    }
+
+    function pintarTabla() {
+      const tbody = document.getElementById("tabla");
+      tbody.innerHTML = "";
+      let ok = 0, pend = 0;
+
+      datos.forEach(d => {
+        if (d.estado === "ok" || d.estado === "revisar") ok++;
+        if (d.estado === "pendiente") pend++;
+
+        // Si ya está entregada (vista oficina, en vivo) mandamos el amarillo;
+        // si no, mostramos el estado normal de geocodificación.
+        const entregado = entregadas.has(d.seq);
+        const badge = entregado
+          ? '<span class="badge b-entregado">ENTREGADO ✓</span>'
+          : badgeGeocode(d.estado);
+
+        const coordTxt = d.lat != null ? `${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}` : "—";
+
+        // Columna "Resolver": solo aparece formulario si está pendiente.
+        let resolver = "—";
+        if (d.estado === "pendiente") {
+          // Link directo: abre Google Maps con la dirección ya escrita.
+          // El clic derecho para copiar coordenadas se hace ALLÁ (en Maps),
+          // sobre el pin, y luego se pegan acá abajo.
+          const buscarMaps = "https://www.google.com/maps/search/?api=1&query="
+            + encodeURIComponent(d.query);
+          resolver = `
+            <div class="resolver">
+              <button class="accion sec mini" onclick="reintentarPorCalle(${d.seq})">① ↻ Reintentar por calle</button>
+              <a class="accion sec mini" style="text-decoration:none;text-align:center" href="${buscarMaps}" target="_blank">② 📍 Buscar en Google Maps</a>
+              <div class="fila2">
+                <input id="coord-${d.seq}" placeholder="③ pega aquí: -33.41, -70.58" />
+                <button class="accion mini" onclick="guardarCoords(${d.seq})">Guardar</button>
+              </div>
+            </div>`;
+        }
+
+        const tr = document.createElement("tr");
+        tr.id = "fila-" + d.seq;
+        if (entregado) tr.className = "fila-entregada";
+        tr.innerHTML = `
+          <td>${d.seq}</td>
+          <td>${d.nombre}</td>
+          <td>${d.query.replace(", Santiago, Chile", "")}</td>
+          <td id="estado-${d.seq}">${badge}</td>
+          <td class="coord">${coordTxt}</td>
+          <td>${resolver}</td>`;
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById("cOk").textContent = ok;
+      document.getElementById("cPend").textContent = pend;
+
+      // La ruta solo se puede enviar/optimizar cuando NO quedan pendientes,
+      // ya se geocodificó algo (ok > 0), y no estamos geocodificando todavía.
+      const listo = (pend === 0 && ok > 0 && !geocodificando);
+      document.getElementById("btnEnviar").disabled = !listo;
+      document.getElementById("btnOptimizar").disabled = !listo;
+    }
+
+    // ================================================================
+    // 6.5) OPTIMIZAR LA RUTA
+    //   Con 26 paradas, probar TODAS las combinaciones es imposible (son
+    //   más que átomos en el universo). Usamos dos trucos encadenados:
+    //   1) Vecino más cercano: parte en la bodega y siempre va a la parada
+    //      más cercana que falte. Rápido, pero a veces zigzaguea.
+    //   2) 2-opt: toma esa ruta y deshace los cruces (cuando dos tramos se
+    //      cruzan, conviene invertir el tramo del medio). La deja casi óptima.
+    //   Medimos en línea recta (todavía no por calles ni tráfico).
+    // ================================================================
+
+    // Aplica una bodega ya resuelta (venga de dirección o de coordenadas):
+    // guarda el punto, sincroniza las cajas de coords, muestra el pin en el
+    // mapa para confirmar, y descarta la optimización vieja (partía de otra bodega).
+    function aplicarBodega(lat, lng, nombre) {
+      BODEGA = { lat, lng };
+      document.getElementById("bodegaLat").value = lat.toFixed(5);
+      document.getElementById("bodegaLng").value = lng.toFixed(5);
+      if (mapa) {
+        if (marcadorBodega) mapa.removeLayer(marcadorBodega);
+        marcadorBodega = L.marker([lat, lng]).addTo(mapa)
+          .bindPopup("🏭 Bodega (partida)" + (nombre ? "<br>" + nombre : ""));
+        mapa.setView([lat, lng], 14);   // saltamos a la bodega para confirmarla
+      }
+      if (ordenOptimo) {                  // la ruta vieja partía de otra bodega
+        ordenOptimo = null;
+        document.getElementById("panelOpt").style.display = "none";
+        if (lineaRuta) { mapa.removeLayer(lineaRuta); lineaRuta = null; }
+      }
+    }
+
+    // Muestra/oculta el "plan B" de pegar coordenadas a mano.
+    function mostrarCoordsBodega(forzar) {
+      const box = document.getElementById("bodegaCoordsBox");
+      const abrir = (forzar === true) || box.style.display === "none";
+      box.style.display = abrir ? "inline" : "none";
+    }
+
+    // CAMINO PRINCIPAL: Juan escribe la dirección y la app la ubica sola.
+    async function buscarBodega() {
+      const dir = document.getElementById("bodegaDir").value.trim();
+      const msg = document.getElementById("bodegaMsg");
+      if (!dir) {
+        msg.style.color = "var(--naranjo)";
+        msg.textContent = "Escribe primero la dirección de la bodega.";
+        return;
+      }
+      msg.style.color = "var(--gris)";
+      msg.textContent = "Buscando la dirección…";
+      try {
+        let r = await geocodificar(dir);
+        // Si no la encuentra, reintenta agregando ciudad/país (ayuda a Nominatim).
+        if (!r && !/chile|santiago/i.test(dir)) {
+          r = await geocodificar(dir + ", Santiago, Chile");
+        }
+        if (!r) {
+          msg.style.color = "var(--rojo)";
+          msg.innerHTML = "No se encontró esa dirección. Agrégale la comuna (ej: …, Las Condes) o usa <b>“pegar coordenadas”</b>.";
+          mostrarCoordsBodega(true);     // abrimos el plan B para no quedar pegados
+          return;
+        }
+        const etiqueta = (r.display_name || "").split(",").slice(0, 3).join(",");
+        aplicarBodega(parseFloat(r.lat), parseFloat(r.lon), etiqueta);
+        msg.style.color = "var(--verde)";
+        msg.innerHTML = "Bodega guardada ✓ — " + etiqueta + ". <b>Mira el pin en el mapa para confirmar.</b>";
+      } catch (e) {
+        msg.style.color = "var(--rojo)";
+        msg.textContent = "Error buscando la dirección. Revisa tu conexión a internet.";
+      }
+    }
+
+    // PLAN B: guarda coordenadas pegadas a mano (sacadas de Google Maps).
+    function guardarBodega() {
+      const lat = parseFloat(document.getElementById("bodegaLat").value);
+      const lng = parseFloat(document.getElementById("bodegaLng").value);
+      const msg = document.getElementById("bodegaMsg");
+      if (isNaN(lat) || isNaN(lng)) {
+        msg.style.color = "var(--rojo)";
+        msg.textContent = "Esas coordenadas no son válidas.";
+        return;
+      }
+      aplicarBodega(lat, lng, null);
+      msg.style.color = "var(--verde)";
+      msg.innerHTML = "Bodega guardada ✓ (por coordenadas). <b>Mira el pin en el mapa para confirmar.</b>";
+    }
+
+    // Largo total de un recorrido: bodega → p1 → p2 → … → pN (no vuelve a la bodega).
+    function largoRuta(lista) {
+      let total = 0, prev = BODEGA;
+      for (const p of lista) { total += distanciaKm(prev, p); prev = p; }
+      return total;
+    }
+
+    // 1) Vecino más cercano: arma una ruta yendo siempre a lo más cercano.
+    function vecinoMasCercano(puntos) {
+      const restantes = [...puntos];
+      const ruta = [];
+      let actual = BODEGA;
+      while (restantes.length) {
+        let mejor = 0, mejorD = Infinity;
+        for (let i = 0; i < restantes.length; i++) {
+          const d = distanciaKm(actual, restantes[i]);
+          if (d < mejorD) { mejorD = d; mejor = i; }
+        }
+        actual = restantes[mejor];
+        ruta.push(actual);
+        restantes.splice(mejor, 1);
+      }
+      return ruta;
+    }
+
+    // 2) 2-opt: invierte tramos mientras eso acorte la ruta total.
+    function dosOpt(ruta) {
+      let mejor = [...ruta];
+      let seguir = true;
+      while (seguir) {
+        seguir = false;
+        for (let i = 0; i < mejor.length - 1; i++) {
+          for (let j = i + 1; j < mejor.length; j++) {
+            const nueva = mejor.slice(0, i)
+              .concat(mejor.slice(i, j + 1).reverse())
+              .concat(mejor.slice(j + 1));
+            if (largoRuta(nueva) < largoRuta(mejor) - 0.0001) {
+              mejor = nueva; seguir = true;
+            }
+          }
+        }
+      }
+      return mejor;
+    }
+
+    function optimizar() {
+      const puntos = datos.filter(d => d.lat != null);
+      if (puntos.length < 2) return;
+
+      // a) Distancia en el orden de la HOJA (como vino de la empresa).
+      const ordenHoja = [...puntos].sort((a, b) => a.seq - b.seq);
+      kmHoja = largoRuta(ordenHoja);
+
+      // b) Nuestra optimización: vecino más cercano + 2-opt.
+      let ruta = vecinoMasCercano(puntos);
+      ruta = dosOpt(ruta);
+      kmOptimo = largoRuta(ruta);
+      ordenOptimo = ruta;
+
+      dibujarRuta(ruta);
+      mostrarPanelOpt();
+      document.getElementById("estado").textContent = "Ruta optimizada ✓";
+    }
+
+    // Dibuja la línea de la ruta optimizada y el marcador de la bodega.
+    function dibujarRuta(ruta) {
+      if (!mapa) return;
+      if (lineaRuta) mapa.removeLayer(lineaRuta);
+      if (marcadorBodega) mapa.removeLayer(marcadorBodega);
+
+      const linea = [[BODEGA.lat, BODEGA.lng], ...ruta.map(p => [p.lat, p.lng])];
+      lineaRuta = L.polyline(linea, { color: "#2c3e50", weight: 3, opacity: 0.7 }).addTo(mapa);
+      marcadorBodega = L.marker([BODEGA.lat, BODEGA.lng]).addTo(mapa).bindPopup("🏭 Bodega (partida)");
+      mapa.fitBounds(lineaRuta.getBounds(), { padding: [30, 30] });
+    }
+
+    function mostrarPanelOpt() {
+      const ahorroKm = kmHoja - kmOptimo;
+      const pct = kmHoja > 0 ? (ahorroKm / kmHoja * 100) : 0;
+      const panel = document.getElementById("panelOpt");
+      panel.style.display = "block";
+      panel.innerHTML = `
+        <div>Orden de la hoja (como vino de la empresa): <b>${kmHoja.toFixed(1)} km</b></div>
+        <div>Ruta optimizada por la app: <b>${kmOptimo.toFixed(1)} km</b></div>
+        <div class="ahorro">Ahorro: ${ahorroKm.toFixed(1)} km (${pct.toFixed(0)}%)</div>
+        <div style="font-size:0.8rem; color:#555; margin-top:6px">
+          * medido en línea recta (todavía no por calles ni tráfico real).
+        </div>`;
+    }
+
+    // ================================================================
+    // 7) ENVIAR RUTA AL CHOFER  (Paso 3: además, la guarda en Supabase)
+    //    - Crea 1 fila en "rutas" (la cabecera: chofer + bodega).
+    //    - Inserta las paradas en "entregas" (una fila por parada, en orden).
+    //    Si Supabase falla, avisa y NO avanza, para que se vea el error.
+    // ================================================================
+    let guardandoRuta = false; // evita doble clic mientras escribe en la base
+
+    async function enviarRuta() {
+      if (guardandoRuta) return;                 // ya está guardando: ignorar
+      guardandoRuta = true;
+      const btn = document.getElementById("btnEnviar");
+      const estado = document.getElementById("estado");
+      btn.disabled = true;
+      estado.textContent = "Guardando la ruta en la base…";
+
+      // Las paradas en el orden que usará el chofer (optimizado si existe).
+      const paradas = rutaChofer();
+
+      try {
+        // 1) Cabecera de la ruta → tabla "rutas". Pedimos que nos devuelva
+        //    la fila creada (.select().single()) para quedarnos con su id.
+        const { data: ruta, error: errRuta } = await db
+          .from("rutas")
+          .insert({
+            chofer: "Chofer 1",              // TODO: después, el nombre real del chofer
+            bodega_nombre: "Bodega principal",
+            bodega_lat: BODEGA.lat,
+            bodega_lng: BODEGA.lng
+          })
+          .select()
+          .single();
+        if (errRuta) throw errRuta;
+
+        rutaIdActual = ruta.id;              // lo guardamos para los pasos 4 y 5
+
+        // 2) Las paradas → tabla "entregas". Una fila por parada, en orden.
+        //    Separamos calle y comuna desde el "query" (calle, comuna, Santiago, Chile).
+        const filasEntregas = paradas.map((d, i) => ({
+          ruta_id:   ruta.id,
+          orden:     i + 1,
+          nombre:    d.nombre,
+          direccion: d.query.split(",")[0].trim(),
+          comuna:    (d.query.split(",")[1] || "Las Condes").trim(),
+          lat:       d.lat,
+          lng:       d.lng,
+          estado:    d.estado === "revisar" ? "revisar" : "por_entregar"
+        }));
+
+        const { error: errEnt } = await db.from("entregas").insert(filasEntregas);
+        if (errEnt) throw errEnt;
+
+        // 3) Todo OK: recién ahora marcamos la ruta como enviada y pasamos al chofer.
+        rutaEnviada = true;
+        estado.textContent = `Ruta guardada y enviada ✓ (${filasEntregas.length} paradas en la base)`;
+
+        // PASO 5B: la oficina empieza a escuchar las entregas de esta ruta.
+        totalEntregasRuta = filasEntregas.length;
+        suscribirEntregasOficina(ruta.id);
+        actualizarPanelVivo(null);
+
+        cambiarRol("chofer");
+
+      } catch (e) {
+        // Algo falló al guardar: avisamos y dejamos reintentar (no avanzamos).
+        estado.textContent = "✗ No se pudo guardar la ruta: " + (e.message || e);
+        btn.disabled = false;
+      } finally {
+        guardandoRuta = false;
+      }
+    }
+
+    // ================================================================
+    // 8) VISTA CHOFER: modo guiado (una parada a la vez) o lista completa
+    //    PASO 4: el chofer LEE su ruta desde Supabase (tabla "entregas").
+    // ================================================================
+    let modoLista = false; // false = modo guiado (lo que pidió Juan)
+
+    // Lee de la base las paradas de la ruta actual, ordenadas por "orden".
+    // Se llama al entrar al rol chofer. Si no hay ruta enviada, muestra la
+    // pantalla de espera. Cada fila trae su "id" (uuid), que usaremos en 4B.
+    async function cargarRutaChofer() {
+      cargandoChofer = true;
+      pintarChofer();             // muestra "Cargando tu ruta…"
+      try {
+        // PASO 5A: si abrimos en OTRO aparato, "rutaIdActual" viene vacío
+        // (vive solo en memoria de la pestaña que envió la ruta). Entonces
+        // vamos a la base y buscamos la ÚLTIMA ruta que envió la oficina,
+        // ordenando por "created_at" de más nuevo a más viejo.
+        if (!rutaIdActual) {
+          const { data: ruta, error: errRuta } = await db
+            .from("rutas")
+            .select("id")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();          // null si todavía no hay ninguna ruta
+          if (errRuta) throw errRuta;
+          if (ruta) rutaIdActual = ruta.id;
+        }
+
+        // Si tras buscar SIGUE sin haber ruta, dejamos la pantalla de espera.
+        if (!rutaIdActual) {
+          paradasChofer = [];
+          return;                    // el "finally" apaga "cargando" y repinta
+        }
+
+        const { data, error } = await db
+          .from("entregas")
+          .select("*")
+          .eq("ruta_id", rutaIdActual)
+          .order("orden", { ascending: true });
+        if (error) throw error;
+        paradasChofer = data || [];
+      } catch (e) {
+        paradasChofer = [];
+        document.getElementById("choferEspera").innerHTML =
+          '<span style="color:var(--rojo);font-weight:600">✗ No se pudo leer tu ruta: '
+          + (e.message || e) + '</span>';
+        document.getElementById("choferEspera").style.display = "block";
+        document.getElementById("choferRuta").style.display = "none";
+      } finally {
+        cargandoChofer = false;
+        pintarChofer();
+      }
+    }
+
+    // Texto de dirección para mostrar (la base guarda calle y comuna por separado).
+    function textoParada(d) {
+      return d.comuna ? `${d.direccion}, ${d.comuna}` : d.direccion;
+    }
+
+    // La ruta en el orden a usar (optimizado si existe; si no, el de la hoja).
+    function rutaChofer() {
+      return ordenOptimo
+        ? ordenOptimo
+        : datos.filter(d => d.lat != null).sort((a, b) => a.seq - b.seq);
+    }
+
+    function alternarModo() {
+      modoLista = !modoLista;
+      document.getElementById("btnModo").textContent = modoLista ? "Modo guiado" : "Ver lista completa";
+      pintarChofer();
+    }
+
+    function pintarChofer() {
+      const espera = document.getElementById("choferEspera");
+      const ruta = document.getElementById("choferRuta");
+
+      // Estado 1: leyendo la ruta desde la base.
+      if (cargandoChofer) {
+        espera.innerHTML = "⏳ Cargando tu ruta desde la base…";
+        espera.style.display = "block";
+        ruta.style.display = "none";
+        return;
+      }
+
+      // Estado 2: no hay ruta (la oficina aún no envía nada).
+      if (!paradasChofer.length) {
+        espera.innerHTML =
+          '⏳ La oficina todavía no te envía la ruta del día.<br>' +
+          '<span style="font-size:0.85rem">(En la vista "Oficina", resuelve los ' +
+          'pendientes y aprieta "Enviar ruta al chofer".)</span>';
+        espera.style.display = "block";
+        ruta.style.display = "none";
+        return;
+      }
+
+      // Estado 3: hay ruta. La mostramos.
+      espera.style.display = "none";
+      ruta.style.display = "block";
+
+      const total = paradasChofer.length;
+      const hechas = paradasChofer.filter(p => p.estado === "entregada").length;
+      document.getElementById("progTexto").textContent = `${hechas} / ${total}`;
+      document.getElementById("progBarra").style.width = total ? (hechas / total * 100) + "%" : "0%";
+
+      if (modoLista) pintarListaCompleta(paradasChofer);
+      else pintarGuiado(paradasChofer);
+    }
+
+    // --- MODO GUIADO: muestra SOLO la parada actual, grande ---
+    function pintarGuiado(paradas) {
+      const cont = document.getElementById("listaParadas");
+
+      // La parada actual = la primera del orden que todavía NO se entrega.
+      const idx = paradas.findIndex(d => d.estado !== "entregada");
+
+      // ¿Terminó todas?
+      if (idx === -1) {
+        const ultima = paradas[paradas.length - 1];
+        cont.innerHTML = `
+          <div class="completado">
+            <div class="check">🎉</div>
+            <div class="txt">¡Ruta completada!</div>
+            <div style="color:var(--gris); margin-top:6px">Entregaste las ${paradas.length} paradas.</div>
+            <button class="accion sec mini" style="margin-top:12px" onclick="marcarEntregada('${ultima.id}')">↩ Deshacer última</button>
+          </div>`;
+        return;
+      }
+
+      const d = paradas[idx];
+      const waze = `https://waze.com/ul?ll=${d.lat}%2C${d.lng}&navigate=yes`;
+      const maps = `https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lng}`;
+      const siguiente = paradas[idx + 1];
+      const anterior = idx > 0 ? paradas[idx - 1] : null;
+
+      cont.innerHTML = `
+        <div class="tarjeta-guia">
+          <div class="etiqueta">PRÓXIMA PARADA</div>
+          <div class="num">${idx + 1} <span style="font-size:1rem; color:#999">de ${paradas.length}</span></div>
+          <div class="cliente">${d.nombre}</div>
+          <div class="direccion">${textoParada(d)}</div>
+          <div class="acciones">
+            <a class="waze-big" href="${waze}" target="_blank">📍 Navegar con Waze</a>
+            <button class="entregar-big" onclick="marcarEntregada('${d.id}')">Entregada ✓</button>
+            <div class="fila-sec">
+              <a href="${maps}" target="_blank">Maps</a>
+              ${anterior ? `<button onclick="marcarEntregada('${anterior.id}')">↩ Volver atrás</button>` : ""}
+            </div>
+          </div>
+        </div>
+        ${siguiente ? `<div class="siguiente-peek">Luego: <b>${siguiente.nombre}</b> — ${textoParada(siguiente)}</div>` : ""}`;
+    }
+
+    // --- MODO LISTA: muestra todas las paradas (vista de resumen) ---
+    function pintarListaCompleta(paradas) {
+      const cont = document.getElementById("listaParadas");
+      cont.innerHTML = "";
+      paradas.forEach((d, idx) => {
+        const ya = d.estado === "entregada";
+        const waze = `https://waze.com/ul?ll=${d.lat}%2C${d.lng}&navigate=yes`;
+        const maps = `https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lng}`;
+        const div = document.createElement("div");
+        div.className = "parada" + (ya ? " entregada" : "");
+        div.innerHTML = `
+          <div class="top">
+            <b>${idx + 1}. ${d.nombre}</b>
+            <span style="font-size:0.75rem; color:#999">orden #${d.orden}</span>
+          </div>
+          <div class="dir">${textoParada(d)}</div>
+          <div class="botones">
+            <a class="waze" href="${waze}" target="_blank">Waze ›</a>
+            <a class="maps" href="${maps}" target="_blank">Maps</a>
+            <button class="entregar ${ya ? 'deshacer' : ''}" onclick="marcarEntregada('${d.id}')">
+              ${ya ? 'Deshacer' : 'Entregada ✓'}
+            </button>
+          </div>`;
+        cont.appendChild(div);
+      });
+    }
+
+    let guardandoEntrega = false; // evita doble clic mientras escribe en la base
+
+    async function marcarEntregada(id) {
+      // PASO 4B: el botón ahora ESCRIBE en Supabase. Es el reverso del 4A:
+      // antes la base mandaba a la pantalla; ahora la pantalla manda a la base.
+      if (guardandoEntrega) return;             // ya está guardando: ignorar
+      const d = paradasChofer.find(p => p.id === id);
+      if (!d) return;
+
+      // ¿Marcamos como entregada o deshacemos?
+      const nuevoEstado = (d.estado === "entregada") ? "por_entregar" : "entregada";
+      // Si se entrega, sellamos la hora exacta; si se deshace, la borramos.
+      const nuevoSello = (nuevoEstado === "entregada") ? new Date().toISOString() : null;
+
+      guardandoEntrega = true;
+      try {
+        // Escribimos en la base PRIMERO. Pedimos que nos DEVUELVA las filas
+        // modificadas (.select()), para detectar el caso traicionero en que la
+        // base "no se queja" pero tampoco modifica nada (permiso de UPDATE).
+        const { data, error } = await db
+          .from("entregas")
+          .update({ estado: nuevoEstado, entregada_at: nuevoSello })
+          .eq("id", id)
+          .select();
+        if (error) throw error;
+        if (!data || data.length === 0) {
+          throw new Error("La base no modificó ninguna fila. Probablemente falta el permiso de UPDATE en la tabla 'entregas'.");
+        }
+
+        // Confirmado en Supabase → reflejamos en memoria y repintamos.
+        d.estado = nuevoEstado;
+        d.entregada_at = nuevoSello;
+        pintarChofer();
+      } catch (e) {
+        alert("No se pudo guardar la entrega en la base:\n" + (e.message || e));
+      } finally {
+        guardandoEntrega = false;
+      }
+    }
+
+    // ================================================================
+    // 9) CAMBIO DE ROL
+    // ================================================================
+    function cambiarRol(rol) {
+      const oficina = rol === "oficina";
+      document.getElementById("vistaOficina").style.display = oficina ? "block" : "none";
+      document.getElementById("vistaChofer").style.display = oficina ? "none" : "block";
+      document.getElementById("rolOficina").classList.toggle("activo", oficina);
+      document.getElementById("rolChofer").classList.toggle("activo", !oficina);
+      if (oficina && mapa) setTimeout(() => mapa.invalidateSize(), 50); // redibuja el mapa
+      // PASO 5B: al volver a Oficina con una ruta activa, nos aseguramos de
+      // estar escuchando en vivo y ponemos al día lo que ya se entregó.
+      if (oficina && rutaIdActual && !canalEntregas) {
+        suscribirEntregasOficina(rutaIdActual);
+        sincronizarEntregadas(rutaIdActual);
+      }
+      if (!oficina) cargarRutaChofer();   // PASO 4: el chofer lee su ruta desde la base
+    }
+
+    // ================================================================
+    // 10) COPIAR JSON (para el próximo paso: optimizar la ruta)
+    // ================================================================
+    function copiarJSON() {
+      const limpio = datos.map(d => ({ seq: d.seq, nombre: d.nombre, lat: d.lat, lng: d.lng, estado: d.estado }));
+      navigator.clipboard.writeText(JSON.stringify(limpio, null, 2));
+      document.getElementById("estado").textContent = "Coordenadas copiadas al portapapeles ✓";
+    }
+  </script>
+</body>
+</html>
