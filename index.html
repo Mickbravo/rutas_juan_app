@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>App de Rutas — Juan</title>
+  <title>App de Rutas</title>
 
   <!-- Leaflet: mapa gratis (OpenStreetMap). Necesita internet. -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -11,6 +11,11 @@
 
   <!-- Supabase: base de datos en la nube. Necesita internet. -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- Tipografía del título (marca). Si no hay internet, cae al tipo del sistema. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@700;800&display=swap" rel="stylesheet">
 
   <style>
     :root {
@@ -26,7 +31,12 @@
       font-family: system-ui, "Segoe UI", Arial, sans-serif;
       margin: 0; padding: 16px; color: #222; background: #f7f7f7;
     }
-    h1 { font-size: 1.55rem; margin: 0 0 5px; color: var(--azul); letter-spacing: .4px; font-weight: 800; }
+    h1 {
+      font-family: "Sora", system-ui, "Segoe UI", Arial, sans-serif;
+      font-size: clamp(2rem, 7vw, 2.7rem);
+      margin: 0 0 6px; color: #0047FF;
+      letter-spacing: -1px; font-weight: 800; line-height: 1.05;
+    }
     p.sub { margin: 0 0 14px; font-size: 0.95rem; }
     p.sub .lugar { color: #c0584f; font-weight: 600; }            /* comuna + entregas del día, rojo tenue */
     p.sub .ver { color: #aaa; font-weight: 400; font-size: 0.8rem; } /* etiqueta de versión, discreta */
@@ -67,6 +77,12 @@
     tr.fila-entregada { background: #fffbea; }
     @keyframes destelloEntrega { from { background: #ffe98a; } to { background: #fffbea; } }
     tr.fila-entregada.recien { animation: destelloEntrega 1.3s ease-out; }
+    /* v6.3: "NO ENTREGADO" rojo para la vista de la oficina */
+    .b-no-entregado { background: var(--rojo); color: #fff; font-weight: 800; letter-spacing: .3px; }
+    tr.fila-no-entregada { background: #fdecea; }
+    @keyframes destelloFalla { from { background: #f9c9c2; } to { background: #fdecea; } }
+    tr.fila-no-entregada.recien { animation: destelloFalla 1.3s ease-out; }
+    .motivo-mini { font-size: 0.7rem; color: #922; margin-top: 3px; }
 
     .coord { font-family: monospace; font-size: 0.8rem; color: var(--gris); }
 
@@ -86,6 +102,10 @@
     .parada a.maps { background: #eee; color: #333; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; }
     .parada button.entregar { padding: 6px 12px; border: none; border-radius: 6px; background: var(--verde); color: #fff; cursor: pointer; font-size: 0.85rem; }
     .parada button.entregar.deshacer { background: #999; }
+    /* v6.3: en modo lista, marcar una parada como no entregada */
+    .parada.fallida { background: #fdecea; border-color: #f0b3aa; }
+    .parada button.nopude { padding: 6px 12px; border: 1px solid var(--rojo); border-radius: 6px; background: #fff; color: var(--rojo); cursor: pointer; font-size: 0.85rem; }
+    .parada button.nopude.reintentar { border-color: #999; color: #555; }
 
     .progreso-caja { background: #e6e6e6; border-radius: 10px; height: 14px; overflow: hidden; margin: 8px 0 14px; }
     .progreso-barra { background: var(--verde); height: 100%; width: 0%; transition: width 0.3s; }
@@ -139,6 +159,18 @@
       background: var(--verde); color: #fff; border: none; padding: 14px;
       border-radius: 10px; font-size: 1.15rem; font-weight: 700; cursor: pointer;
     }
+    /* v6.3: botón "No pude entregar" + panel para elegir el motivo */
+    .tarjeta-guia button.nopude-big {
+      background: #fff; color: var(--rojo); border: 1.5px solid var(--rojo); padding: 12px;
+      border-radius: 10px; font-size: 1rem; font-weight: 700; cursor: pointer;
+    }
+    .tarjeta-guia .motivo-panel { display: flex; flex-direction: column; gap: 8px; max-width: 320px; margin: 6px auto 0; }
+    .tarjeta-guia .motivo-panel .titulo { font-weight: 700; color: var(--azul); margin-bottom: 2px; }
+    .tarjeta-guia .motivo-panel button {
+      padding: 12px; border: 1px solid var(--borde); border-radius: 10px;
+      background: #fff; font-size: 1rem; cursor: pointer; color: #333;
+    }
+    .tarjeta-guia .motivo-panel button.cancelar { background: #f0f0f0; border: none; color: var(--gris); }
     .tarjeta-guia .fila-sec { display: flex; gap: 8px; justify-content: center; }
     .tarjeta-guia .fila-sec a, .tarjeta-guia .fila-sec button {
       background: #eee; color: #333; text-decoration: none; border: none;
@@ -155,25 +187,25 @@
 </head>
 <body>
 
-  <h1>APP de RUTAS — JUAN</h1>
-  <p class="sub"><span class="lugar" id="subLugar">—</span> <span class="ver">· v6.2</span></p>
+  <h1>APP de RUTAS</h1>
+  <p class="sub"><span class="lugar" id="subLugar">—</span> <span class="ver">· v6.5</span></p>
 
   <!-- Cartel de estado de la conexión a Supabase (prueba del paso 2). -->
   <div id="estadoSupabase" style="padding:8px 12px; border-radius:6px; margin-bottom:14px;
        font-size:0.85rem; background:#fff3cd; border:1px solid #e0c000; color:#665500">
-    ⏳ Probando conexión con Supabase…
+    ⏳ Probando conexión…
   </div>
 
   <!-- ============ SELECTOR DE ROL ============ -->
   <div class="roles">
-    <button id="rolOficina" class="activo" onclick="cambiarRol('oficina')">🗂️ Oficina (dueño)</button>
+    <button id="rolOficina" class="activo" onclick="cambiarRol('oficina')">🗂️ Oficina</button>
     <button id="rolChofer" onclick="cambiarRol('chofer')">🚚 Chofer</button>
   </div>
 
   <!-- ============ VISTA OFICINA ============ -->
   <div id="vistaOficina">
 
-    <!-- Puerta de entrada: Juan pega o sube la lista del día. -->
+    <!-- Puerta de entrada: el usuario pega o sube la lista del día. -->
     <div class="cargar-caja">
       <b>📋 Cargar lista del día</b>
       <p style="margin:6px 0; font-size:0.82rem; color:#555">
@@ -203,6 +235,7 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
     <div class="leyenda-mapa">
       <span><span class="dot" style="background:#2c6fb5"></span> por entregar</span>
       <span><span class="dot" style="background:#1a8c3a"></span> entregada</span>
+      <span><span class="dot" style="background:#c0392b"></span> no entregada</span>
       <span><span class="dot" style="background:#e08a00"></span> revisar</span>
     </div>
 
@@ -276,7 +309,7 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
   <script>
     // ================================================================
     // 0) CONEXIÓN A SUPABASE (paso 2)
-    //    Estas dos líneas son las llaves de tu proyecto "RutasJuan".
+    //    Estas dos líneas son las llaves de tu proyecto en la nube.
     //    La publishable key es pública y segura de tener acá, porque el
     //    RLS de las tablas controla qué se puede hacer con ella.
     // ================================================================
@@ -296,12 +329,12 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
         caja.style.background = "#eef7ee";
         caja.style.borderColor = "#1a8c3a";
         caja.style.color = "#1a6b2e";
-        caja.textContent = "✓ Conectado a Supabase (proyecto RutasJuan)";
+        caja.textContent = "✓ Conexión exitosa";
       } catch (e) {
         caja.style.background = "#fdecea";
         caja.style.borderColor = "#c0392b";
         caja.style.color = "#922";
-        caja.textContent = "✗ No se pudo conectar a Supabase: " + (e.message || e);
+        caja.textContent = "✗ No se pudo conectar al servidor: " + (e.message || e);
       }
     }
     window.addEventListener("load", probarConexion);
@@ -333,7 +366,7 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
       { seq: 19, nombre: "Dominique Berríos",   query: "Gerónimo de Alderete 885, Las Condes, Santiago, Chile" },
       { seq: 20, nombre: "Viviana Pérez",       query: "Hermanos Cabot 7393, Las Condes, Santiago, Chile" },
       { seq: 21, nombre: "Valeria Iturriaga",   query: "Anillo La Cumbre 1259, Las Condes, Santiago, Chile" },
-      { seq: 22, nombre: "Juan J. Palavicino",  query: "Avenida Las Condes 8845, Las Condes, Santiago, Chile" },
+      { seq: 22, nombre: "Tomás Palavicino",  query: "Avenida Las Condes 8845, Las Condes, Santiago, Chile" },
       { seq: 23, nombre: "Carolina Bernstein",  query: "Avenida Presidente Kennedy 7301, Las Condes, Santiago, Chile" },
       { seq: 24, nombre: "Lastenia Vega",       query: "Las Verbenas 8925, Las Condes, Santiago, Chile" },
       { seq: 25, nombre: "M. José Canales",     query: "La Portería 11859, Las Condes, Santiago, Chile" },
@@ -347,6 +380,8 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
     let rutaIdActual = null;      // id de la ruta guardada en Supabase (pasos 4 y 5)
     let geocodificando = false;   // ¿se está geocodificando ahora mismo?
     const entregadas = new Set(); // seq de las paradas ya entregadas (mapa de oficina)
+    // v6.3: seq -> motivo de las paradas que el chofer NO pudo entregar (mapa de oficina).
+    const noEntregadas = new Map();
 
     // PASO 4: la ruta que ve el chofer ahora viene LEÍDA de Supabase, no de
     // memoria. Cada parada trae su "id" (uuid) real de la tabla "entregas".
@@ -416,6 +451,7 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
     // Color del punto: entregada = verde, por entregar = azul, a revisar = naranjo.
     function colorMarcador(d) {
       if (entregadas.has(d.seq)) return "#1a8c3a"; // entregada → verde
+      if (noEntregadas.has(d.seq)) return "#c0392b"; // no entregada → rojo
       if (d.estado === "revisar") return "#e08a00"; // a revisar → naranjo
       return "#2c6fb5";                              // ubicada, sin entregar → azul
     }
@@ -430,7 +466,8 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
         fillColor: colorMarcador(d), fillOpacity: 1
       }).addTo(mapa).bindPopup(
         `<b>${d.seq}. ${d.nombre}</b><br>${d.query}` +
-        (entregada ? "<br><b style='color:#1a8c3a'>Entregada ✓</b>" : "")
+        (entregada ? "<br><b style='color:#1a8c3a'>Entregada ✓</b>" : "") +
+        (noEntregadas.has(d.seq) ? `<br><b style='color:#c0392b'>No entregada ⚠</b>${noEntregadas.get(d.seq) ? " — " + noEntregadas.get(d.seq) : ""}` : "")
       );
     }
 
@@ -468,30 +505,37 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
     function manejarCambioEntrega(row, conPulso = true) {
       const d = buscarEnDatos(row);
       if (!d) return;
-      if (row.estado === "entregada") entregadas.add(d.seq);
-      else entregadas.delete(d.seq);   // por si el chofer "deshace"
+      if (row.estado === "entregada") {
+        entregadas.add(d.seq); noEntregadas.delete(d.seq);
+      } else if (row.estado === "no_entregada") {
+        noEntregadas.set(d.seq, row.motivo || ""); entregadas.delete(d.seq);
+      } else {                            // por_entregar / revisar → el chofer deshizo
+        entregadas.delete(d.seq); noEntregadas.delete(d.seq);
+      }
       ponerMarcador(d);                // lo re-pinta con su nuevo color
       if (conPulso) pulsarMarcador(d.seq);
       actualizarPanelVivo(row);
-      refrescarFilaEntrega(d, conPulso); // v6.1: enciende el "ENTREGADO" en la tabla
+      refrescarFilaEntrega(d, conPulso); // v6.1/6.3: enciende el badge en la tabla
     }
 
-    // v6.1: actualiza UNA fila de la tabla cuando cambia su entrega (en vivo).
+    // v6.1/6.3: actualiza UNA fila de la tabla cuando cambia su entrega (en vivo).
     function refrescarFilaEntrega(d, recien) {
       const td = document.getElementById("estado-" + d.seq);
       const tr = document.getElementById("fila-" + d.seq);
       if (!td || !tr) return;
+      tr.classList.remove("fila-entregada", "fila-no-entregada", "recien");
       if (entregadas.has(d.seq)) {
         td.innerHTML = '<span class="badge b-entregado">ENTREGADO ✓</span>';
         tr.classList.add("fila-entregada");
-        if (recien) {                  // breve destello para que el ojo lo pille
-          tr.classList.remove("recien");
-          void tr.offsetWidth;         // reinicia la animación
-          tr.classList.add("recien");
-        }
+        if (recien) { void tr.offsetWidth; tr.classList.add("recien"); }
+      } else if (noEntregadas.has(d.seq)) {
+        const motivo = noEntregadas.get(d.seq);
+        td.innerHTML = '<span class="badge b-no-entregado">NO ENTREGADO ⚠</span>'
+          + (motivo ? `<div class="motivo-mini">${motivo}</div>` : '');
+        tr.classList.add("fila-no-entregada");
+        if (recien) { void tr.offsetWidth; tr.classList.add("recien"); }
       } else {                         // el chofer deshizo: volvemos al estado normal
         td.innerHTML = badgeGeocode(d.estado);
-        tr.classList.remove("fila-entregada", "recien");
       }
     }
 
@@ -508,18 +552,27 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
     function actualizarPanelVivo(rowReciente) {
       const panel = document.getElementById("panelVivo");
       panel.style.display = "block";
-      const hechas = entregadas.size;
+      const ent = entregadas.size;
+      const fall = noEntregadas.size;
       const total = totalEntregasRuta || datos.filter(d => d.lat != null).length;
-      document.getElementById("vivoConteo").textContent = `${hechas} / ${total} entregadas`;
-      document.getElementById("vivoBarra").style.width = total ? (hechas / total * 100) + "%" : "0%";
+      const atendidas = ent + fall;     // paradas ya visitadas (entregadas o no)
+      document.getElementById("vivoConteo").textContent =
+        fall ? `${ent} entregadas · ${fall} no entregadas / ${total}`
+             : `${ent} / ${total} entregadas`;
+      document.getElementById("vivoBarra").style.width = total ? (atendidas / total * 100) + "%" : "0%";
       if (rowReciente) {
         // entregada_at viene en UTC; toLocaleTimeString lo muestra en hora chilena.
         const hora = rowReciente.entregada_at
           ? new Date(rowReciente.entregada_at).toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })
           : "";
-        const verbo = rowReciente.estado === "entregada" ? "entregó" : "volvió a dejar pendiente";
+        let verbo;
+        if (rowReciente.estado === "entregada") verbo = "entregó";
+        else if (rowReciente.estado === "no_entregada")
+          verbo = "NO pudo entregar" + (rowReciente.motivo ? ` (${rowReciente.motivo})` : "");
+        else verbo = "volvió a dejar pendiente";
+        const icono = rowReciente.estado === "no_entregada" ? "⚠" : "✓";
         document.getElementById("vivoUltima").innerHTML =
-          `Último: <b>${rowReciente.nombre}</b> — se ${verbo}${hora ? " a las " + hora : ""} ✓`;
+          `Último: <b>${rowReciente.nombre}</b> — se ${verbo}${hora ? " a las " + hora : ""} ${icono}`;
       }
     }
 
@@ -543,7 +596,8 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
         if (error) throw error;
         totalEntregasRuta = (data || []).length;
         (data || []).forEach(row => {
-          if (row.estado === "entregada") manejarCambioEntrega(row, false); // sin pulso al cargar
+          if (row.estado === "entregada" || row.estado === "no_entregada")
+            manejarCambioEntrega(row, false); // sin pulso al cargar
         });
         actualizarPanelVivo(null);
       } catch (e) {
@@ -628,6 +682,7 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
       kmHoja = 0; kmOptimo = 0;
       rutaEnviada = false;
       entregadas.clear();
+      noEntregadas.clear();
       document.getElementById("panelOpt").style.display = "none";
       document.getElementById("btnCopiar").disabled = true;
       limpiarMapa();
@@ -783,11 +838,20 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
         if (d.estado === "pendiente") pend++;
 
         // Si ya está entregada (vista oficina, en vivo) mandamos el amarillo;
+        // si el chofer no pudo entregar, el rojo con el motivo;
         // si no, mostramos el estado normal de geocodificación.
         const entregado = entregadas.has(d.seq);
-        const badge = entregado
-          ? '<span class="badge b-entregado">ENTREGADO ✓</span>'
-          : badgeGeocode(d.estado);
+        const fallido = noEntregadas.has(d.seq);
+        let badge;
+        if (entregado) {
+          badge = '<span class="badge b-entregado">ENTREGADO ✓</span>';
+        } else if (fallido) {
+          const motivo = noEntregadas.get(d.seq);
+          badge = '<span class="badge b-no-entregado">NO ENTREGADO ⚠</span>'
+            + (motivo ? `<div class="motivo-mini">${motivo}</div>` : '');
+        } else {
+          badge = badgeGeocode(d.estado);
+        }
 
         const coordTxt = d.lat != null ? `${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}` : "—";
 
@@ -813,6 +877,7 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
         const tr = document.createElement("tr");
         tr.id = "fila-" + d.seq;
         if (entregado) tr.className = "fila-entregada";
+        else if (fallido) tr.className = "fila-no-entregada";
         tr.innerHTML = `
           <td>${d.seq}</td>
           <td>${d.nombre}</td>
@@ -871,7 +936,7 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
       box.style.display = abrir ? "inline" : "none";
     }
 
-    // CAMINO PRINCIPAL: Juan escribe la dirección y la app la ubica sola.
+    // CAMINO PRINCIPAL: el usuario escribe la dirección y la app la ubica sola.
     async function buscarBodega() {
       const dir = document.getElementById("bodegaDir").value.trim();
       const msg = document.getElementById("bodegaMsg");
@@ -1085,13 +1150,16 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
     // 8) VISTA CHOFER: modo guiado (una parada a la vez) o lista completa
     //    PASO 4: el chofer LEE su ruta desde Supabase (tabla "entregas").
     // ================================================================
-    let modoLista = false; // false = modo guiado (lo que pidió Juan)
+    let modoLista = false; // false = modo guiado (una parada a la vez)
+    // v6.3: id de la parada cuyo motivo de "no entrega" se está eligiendo (o null).
+    let pidiendoMotivo = null;
 
     // Lee de la base las paradas de la ruta actual, ordenadas por "orden".
     // Se llama al entrar al rol chofer. Si no hay ruta enviada, muestra la
     // pantalla de espera. Cada fila trae su "id" (uuid), que usaremos en 4B.
     async function cargarRutaChofer() {
       cargandoChofer = true;
+      pidiendoMotivo = null;      // por si quedó un panel de motivo abierto
       pintarChofer();             // muestra "Cargando tu ruta…"
       try {
         // PASO 5A: si abrimos en OTRO aparato, "rutaIdActual" viene vacío
@@ -1182,8 +1250,11 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
 
       const total = paradasChofer.length;
       const hechas = paradasChofer.filter(p => p.estado === "entregada").length;
-      document.getElementById("progTexto").textContent = `${hechas} / ${total}`;
-      document.getElementById("progBarra").style.width = total ? (hechas / total * 100) + "%" : "0%";
+      const fallidas = paradasChofer.filter(p => p.estado === "no_entregada").length;
+      const atendidas = hechas + fallidas;
+      document.getElementById("progTexto").textContent =
+        fallidas ? `${hechas} entregadas · ${fallidas} no` : `${hechas} / ${total}`;
+      document.getElementById("progBarra").style.width = total ? (atendidas / total * 100) + "%" : "0%";
 
       if (modoLista) pintarListaCompleta(paradasChofer);
       else pintarGuiado(paradasChofer);
@@ -1193,18 +1264,33 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
     function pintarGuiado(paradas) {
       const cont = document.getElementById("listaParadas");
 
-      // La parada actual = la primera del orden que todavía NO se entrega.
-      const idx = paradas.findIndex(d => d.estado !== "entregada");
+      // "Atendida" = ya entregada O ya marcada como no entregada. La parada
+      // actual es la primera que todavía NO se atiende.
+      const atendida = p => p.estado === "entregada" || p.estado === "no_entregada";
+      const idx = paradas.findIndex(p => !atendida(p));
 
-      // ¿Terminó todas?
+      // ¿Atendió todas? → pantalla de cierre con el desglose.
       if (idx === -1) {
+        const ent = paradas.filter(p => p.estado === "entregada");
+        const fall = paradas.filter(p => p.estado === "no_entregada");
         const ultima = paradas[paradas.length - 1];
+        const listaFallidas = fall.length
+          ? `<div style="text-align:left; max-width:340px; margin:14px auto 0; background:#fdecea; border:1px solid #f0b3aa; border-radius:8px; padding:10px 12px;">
+               <b style="color:var(--rojo)">⚠ ${fall.length} no entregada${fall.length > 1 ? "s" : ""} (vuelven a la bodega):</b>
+               <ul style="margin:6px 0 0; padding-left:18px; font-size:0.9rem; color:#333">
+                 ${fall.map(p => `<li><b>${p.nombre}</b>${p.motivo ? " — " + p.motivo : ""}</li>`).join("")}
+               </ul>
+             </div>`
+          : "";
         cont.innerHTML = `
           <div class="completado">
             <div class="check">🎉</div>
-            <div class="txt">¡Ruta completada!</div>
-            <div style="color:var(--gris); margin-top:6px">Entregaste las ${paradas.length} paradas.</div>
-            <button class="accion sec mini" style="margin-top:12px" onclick="marcarEntregada('${ultima.id}')">↩ Deshacer última</button>
+            <div class="txt">¡Ruta terminada!</div>
+            <div style="color:var(--gris); margin-top:6px">
+              ${ent.length} entregada${ent.length === 1 ? "" : "s"} de ${paradas.length} paradas.
+            </div>
+            ${listaFallidas}
+            <button class="accion sec mini" style="margin-top:14px" onclick="marcarEntregada('${ultima.id}')">↩ Deshacer última</button>
           </div>`;
         return;
       }
@@ -1212,8 +1298,32 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
       const d = paradas[idx];
       const waze = `https://waze.com/ul?ll=${d.lat}%2C${d.lng}&navigate=yes`;
       const maps = `https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lng}`;
-      const siguiente = paradas[idx + 1];
+      // "Luego" = la siguiente parada que aún no se atiende.
+      const siguiente = paradas.slice(idx + 1).find(p => !atendida(p));
       const anterior = idx > 0 ? paradas[idx - 1] : null;
+
+      // Bloque de acciones: normal, o el panel para elegir el motivo de no-entrega.
+      let acciones;
+      if (pidiendoMotivo === d.id) {
+        acciones = `
+          <div class="motivo-panel">
+            <div class="titulo">¿Por qué no se pudo entregar?</div>
+            <button onclick="guardarNoEntregada('${d.id}','Ausente / nadie en casa')">🚪 Ausente / nadie en casa</button>
+            <button onclick="guardarNoEntregada('${d.id}','Dirección no existe / no encontrada')">📍 Dirección no existe</button>
+            <button onclick="guardarNoEntregada('${d.id}','Rechazó el paquete')">✋ Rechazó el paquete</button>
+            <button onclick="guardarNoEntregadaOtro('${d.id}')">✏️ Otro motivo…</button>
+            <button class="cancelar" onclick="cancelarMotivo()">Cancelar</button>
+          </div>`;
+      } else {
+        acciones = `
+          <a class="waze-big" href="${waze}" target="_blank">📍 Navegar con Waze</a>
+          <button class="entregar-big" onclick="marcarEntregada('${d.id}')">Entregada ✓</button>
+          <button class="nopude-big" onclick="noEntregada('${d.id}')">No pude entregar</button>
+          <div class="fila-sec">
+            <a href="${maps}" target="_blank">Maps</a>
+            ${anterior ? `<button onclick="marcarEntregada('${anterior.id}')">↩ Volver atrás</button>` : ""}
+          </div>`;
+      }
 
       cont.innerHTML = `
         <div class="tarjeta-guia">
@@ -1221,14 +1331,7 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
           <div class="num">${idx + 1} <span style="font-size:1rem; color:#999">de ${paradas.length}</span></div>
           <div class="cliente">${d.nombre}</div>
           <div class="direccion">${textoParada(d)}</div>
-          <div class="acciones">
-            <a class="waze-big" href="${waze}" target="_blank">📍 Navegar con Waze</a>
-            <button class="entregar-big" onclick="marcarEntregada('${d.id}')">Entregada ✓</button>
-            <div class="fila-sec">
-              <a href="${maps}" target="_blank">Maps</a>
-              ${anterior ? `<button onclick="marcarEntregada('${anterior.id}')">↩ Volver atrás</button>` : ""}
-            </div>
-          </div>
+          <div class="acciones">${acciones}</div>
         </div>
         ${siguiente ? `<div class="siguiente-peek">Luego: <b>${siguiente.nombre}</b> — ${textoParada(siguiente)}</div>` : ""}`;
     }
@@ -1239,22 +1342,35 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
       cont.innerHTML = "";
       paradas.forEach((d, idx) => {
         const ya = d.estado === "entregada";
+        const fallida = d.estado === "no_entregada";
         const waze = `https://waze.com/ul?ll=${d.lat}%2C${d.lng}&navigate=yes`;
         const maps = `https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lng}`;
         const div = document.createElement("div");
-        div.className = "parada" + (ya ? " entregada" : "");
+        div.className = "parada" + (ya ? " entregada" : "") + (fallida ? " fallida" : "");
+
+        // Botones según el estado de la parada.
+        let botones;
+        if (ya) {
+          botones = `<button class="entregar deshacer" onclick="marcarEntregada('${d.id}')">Deshacer</button>`;
+        } else if (fallida) {
+          botones = `<button class="nopude reintentar" onclick="reintentarParada('${d.id}')">↺ Reintentar</button>`;
+        } else {
+          botones = `
+            <button class="entregar" onclick="marcarEntregada('${d.id}')">Entregada ✓</button>
+            <button class="nopude" onclick="noEntregada('${d.id}')">No pude</button>`;
+        }
+
         div.innerHTML = `
           <div class="top">
             <b>${idx + 1}. ${d.nombre}</b>
             <span style="font-size:0.75rem; color:#999">orden #${d.orden}</span>
           </div>
           <div class="dir">${textoParada(d)}</div>
+          ${fallida && d.motivo ? `<div class="dir" style="color:var(--rojo)">⚠ ${d.motivo}</div>` : ""}
           <div class="botones">
             <a class="waze" href="${waze}" target="_blank">Waze ›</a>
             <a class="maps" href="${maps}" target="_blank">Maps</a>
-            <button class="entregar ${ya ? 'deshacer' : ''}" onclick="marcarEntregada('${d.id}')">
-              ${ya ? 'Deshacer' : 'Entregada ✓'}
-            </button>
+            ${botones}
           </div>`;
         cont.appendChild(div);
       });
@@ -1281,7 +1397,7 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
         // base "no se queja" pero tampoco modifica nada (permiso de UPDATE).
         const { data, error } = await db
           .from("entregas")
-          .update({ estado: nuevoEstado, entregada_at: nuevoSello })
+          .update({ estado: nuevoEstado, entregada_at: nuevoSello, motivo: null })
           .eq("id", id)
           .select();
         if (error) throw error;
@@ -1292,9 +1408,94 @@ Alexis Silva&#9;Luis Thayer Ojeda 1230&#9;Las Condes"></textarea>
         // Confirmado en Supabase → reflejamos en memoria y repintamos.
         d.estado = nuevoEstado;
         d.entregada_at = nuevoSello;
+        d.motivo = null;
         pintarChofer();
       } catch (e) {
         alert("No se pudo guardar la entrega en la base:\n" + (e.message || e));
+      } finally {
+        guardandoEntrega = false;
+      }
+    }
+
+    // ================================================================
+    // 8.5) NO PUDO ENTREGAR (v6.3)
+    //   El chofer abre un panelcito, elige el motivo, y la parada queda
+    //   marcada "no_entregada" (vuelve a la bodega). Avanza igual a la
+    //   siguiente. La oficina lo ve en vivo, en rojo, con el motivo.
+    // ================================================================
+
+    // Abre el panel de motivos para la parada indicada (en modo guiado).
+    function noEntregada(id) {
+      pidiendoMotivo = id;
+      pintarChofer();
+    }
+
+    // Cierra el panel sin marcar nada.
+    function cancelarMotivo() {
+      pidiendoMotivo = null;
+      pintarChofer();
+    }
+
+    // "Otro motivo…": pide el texto a mano y lo guarda.
+    function guardarNoEntregadaOtro(id) {
+      const txt = (prompt("¿Cuál fue el motivo?") || "").trim();
+      if (!txt) return;                  // si cancela o deja vacío, no hace nada
+      guardarNoEntregada(id, txt);
+    }
+
+    // Escribe en Supabase: estado = "no_entregada" + el motivo. Mismo patrón
+    // seguro que marcarEntregada (pide las filas modificadas para detectar el
+    // caso en que la base no se queja pero tampoco modifica nada).
+    async function guardarNoEntregada(id, motivo) {
+      if (guardandoEntrega) return;
+      const d = paradasChofer.find(p => p.id === id);
+      if (!d) return;
+      const sello = new Date().toISOString();   // hora del intento (en UTC)
+      guardandoEntrega = true;
+      try {
+        const { data, error } = await db
+          .from("entregas")
+          .update({ estado: "no_entregada", entregada_at: sello, motivo })
+          .eq("id", id)
+          .select();
+        if (error) throw error;
+        if (!data || data.length === 0) {
+          throw new Error("La base no modificó ninguna fila. Probablemente falta el permiso de UPDATE en la tabla 'entregas'.");
+        }
+        d.estado = "no_entregada";
+        d.entregada_at = sello;
+        d.motivo = motivo;
+        pidiendoMotivo = null;
+        pintarChofer();
+      } catch (e) {
+        alert("No se pudo guardar en la base:\n" + (e.message || e));
+      } finally {
+        guardandoEntrega = false;
+      }
+    }
+
+    // Reintentar: vuelve una parada "no_entregada" a "por_entregar" (limpia motivo).
+    async function reintentarParada(id) {
+      if (guardandoEntrega) return;
+      const d = paradasChofer.find(p => p.id === id);
+      if (!d) return;
+      guardandoEntrega = true;
+      try {
+        const { data, error } = await db
+          .from("entregas")
+          .update({ estado: "por_entregar", entregada_at: null, motivo: null })
+          .eq("id", id)
+          .select();
+        if (error) throw error;
+        if (!data || data.length === 0) {
+          throw new Error("La base no modificó ninguna fila (¿falta el permiso de UPDATE?).");
+        }
+        d.estado = "por_entregar";
+        d.entregada_at = null;
+        d.motivo = null;
+        pintarChofer();
+      } catch (e) {
+        alert("No se pudo reintentar en la base:\n" + (e.message || e));
       } finally {
         guardandoEntrega = false;
       }
